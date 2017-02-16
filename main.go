@@ -125,7 +125,7 @@ func (b *browser) execClone() error {
 	}
 
 	cmdFetch := exec.Command("git", "fetch")
-	if err := execCmd(*cmdFetch, filepath.Join(b.workingd, SandboxDirName), nil, &e); err != nil {
+	if err := execCmd(*cmdFetch, filepath.Join(b.workingd, SandboxDirName), nil, nil); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
 	rawFetch := e.String()
@@ -133,6 +133,8 @@ func (b *browser) execClone() error {
 		return errors.New(rawFetch)
 	}
 	e.Reset()
+
+	//Todo: Set current commit hash
 
 	cmdCommitList := exec.Command("git", "--no-pager", "log", "--pretty=format:%H::%s::%an")
 	if err := execCmd(*cmdCommitList, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
@@ -164,7 +166,9 @@ func (b *browser) execClone() error {
 	o.Reset()
 	blines := strings.Split(rawBranchList, "\n")
 	for _, line := range blines {
-		b.branchList = append(b.branchList, strings.TrimSpace(line))
+		if len(strings.TrimSpace(line)) > 0 {
+			b.branchList = append(b.branchList, strings.TrimSpace(line))
+		}
 	}
 
 	return nil
@@ -270,6 +274,9 @@ func (b *browser) execClean() error {
 }
 
 func (b *browser) execCommand(args []string) error {
+	for i, arg := range args {
+		args[i] = strings.TrimSpace(arg)
+	}
 	switch args[0] {
 	case "first":
 		if len(b.commitList) > 0 {
@@ -284,14 +291,8 @@ func (b *browser) execCommand(args []string) error {
 	case "list":
 		return b.execLog()
 	case "next":
-		if len(args) != 2 {
-			return errors.New("error: invalid arguments")
-		}
 		return b.execNext()
 	case "prev":
-		if len(args) != 2 {
-			return errors.New("error: invalid arguments")
-		}
 		return b.execPrev()
 	case "move":
 		if len(args) != 2 {
@@ -321,13 +322,12 @@ func (b *browser) runRepl() error {
 		in, _ := consoleReader.ReadString('\n')
 		in = strings.ToLower(in)
 
-		if err := b.execCommand(strings.Split(in, " ")); err != nil {
-			return errors.Wrap(err, "error: could not execute command")
-		}
-
 		if strings.HasPrefix(in, "quit") {
 			b.execClean()
 			break
+		}
+		if err := b.execCommand(strings.Split(in, " ")); err != nil {
+			return errors.Wrap(err, "error: could not execute command")
 		}
 	}
 	return nil
