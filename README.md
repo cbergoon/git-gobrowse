@@ -24,7 +24,7 @@ Move to a directory on your path with ```mv $GOPATH/bin/git-gobrowse /usr/local/
 
 
 ####Todo
-1) Implement 'help' command
-4) Implement 'clean' command
-2) Kinda messy. Could use a lot of refactoring...
-3) Better testing?
+1. Implement 'help' command
+2. Implement 'clean' command
+3. Kinda messy. Could use a lot of refactoring...
+4. Better testing?
