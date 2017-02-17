@@ -16,6 +16,8 @@ import (
 
 const SandboxDirName string = ".sandbox"
 
+var CheckErrors []string = []string{"ERROR:", "Error:", "error:", "FATAL:", "Fatal:", "fatal:"}
+
 type commit struct {
 	hash    string
 	message string
@@ -52,48 +54,161 @@ func execCmd(cmd exec.Cmd, dir string, sout io.Writer, serr io.Writer) error {
 	return nil
 }
 
-func (b *browser) initialize() error {
-	var o bytes.Buffer
+func trimCheck(r bytes.Buffer, trim bool, check bool, checkStart bool, checkList []string) (string, error) {
+	var result string
+	if trim {
+		result = strings.TrimSpace(r.String())
+	} else {
+		result = r.String()
+	}
+	if check {
+		for _, search := range checkList {
+			if checkStart {
+				if strings.HasPrefix(result, search) {
+					return "", errors.New(result)
+				}
+			} else {
+				if strings.Contains(result, search) {
+					return "", errors.New(result)
+				}
+			}
+		}
+	}
+	return result, nil
+}
 
+func doBaseGetWorkingDir() (string, error) {
+	var o bytes.Buffer
 	cmdGitPresent := exec.Command("git", "rev-parse", "--show-toplevel")
 	if err := execCmd(*cmdGitPresent, "", &o, nil); err != nil {
-		return errors.Wrap(err, "error: an error occured while processing command")
+		return "", errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.workingd = strings.TrimSpace(o.String())
-	if strings.Contains(b.workingd, "fatal") {
-		return errors.New(b.workingd)
-	}
-	o.Reset()
+	return trimCheck(o, true, true, true, CheckErrors)
+}
 
+func doBaseGetRemoteUrl() (string, error) {
+	var o bytes.Buffer
 	cmdGitUrl := exec.Command("git", "remote", "get-url", "origin")
 	if err := execCmd(*cmdGitUrl, "", &o, nil); err != nil {
-		return errors.Wrap(err, "error: an error occured while processing command")
+		return "", errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.gitUrl = strings.TrimSpace(o.String())
-	if strings.Contains(b.gitUrl, "fatal") {
-		return errors.New(b.gitUrl)
-	}
-	o.Reset()
+	return trimCheck(o, true, true, true, CheckErrors)
+}
 
+func doBaseCreateSandbox(sandboxDir string) error {
+	if err := os.MkdirAll(sandboxDir, 0755); err != nil {
+		return errors.Wrap(err, "error: could not create sandbox directory")
+	}
+	return nil
+}
+
+func doBaseRemoveSandbox(sandboxDir string) error {
+	if err := os.RemoveAll(sandboxDir); err != nil {
+		return errors.Wrap(err, "error: could not remove sandbox directory")
+	}
+	return nil
+}
+
+func doGetHeadCommit(dir string) (string, error) {
+	var o bytes.Buffer
 	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
-	if err := execCmd(*cmdGitHeadCommit, "", &o, nil); err != nil {
-		return errors.Wrap(err, "error: an error occured while processing command")
+	if err := execCmd(*cmdGitHeadCommit, dir, &o, nil); err != nil {
+		return "", errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.rbhash = strings.TrimSpace(o.String())
-	if strings.Contains(b.rbhash, "fatal") {
-		return errors.New(b.rbhash)
-	}
-	o.Reset()
+	return trimCheck(o, true, true, true, CheckErrors)
+}
 
+func doGetHeadBranch(dir string) (string, error) {
+	var o bytes.Buffer
 	checkGitHeadBranch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	if err := execCmd(*checkGitHeadBranch, "", &o, nil); err != nil {
+	if err := execCmd(*checkGitHeadBranch, dir, &o, nil); err != nil {
+		return "", errors.Wrap(err, "error: an error occured while processing command")
+	}
+	return trimCheck(o, true, true, true, CheckErrors)
+}
+
+func doGitClone(dir string, url string) error {
+	var e bytes.Buffer
+	cmdClone := exec.Command("git", "clone", "--verbose", url, dir)
+	if err := execCmd(*cmdClone, "", nil, &e); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.rbbranch = strings.TrimSpace(o.String())
-	if strings.Contains(b.rbbranch, "fatal") {
-		return errors.New(b.rbbranch)
+	_, err := trimCheck(e, false, true, true, CheckErrors)
+	return err
+}
+
+func doGitFetch(dir string) error {
+	var e bytes.Buffer
+	cmdFetch := exec.Command("git", "fetch")
+	if err := execCmd(*cmdFetch, dir, nil, nil); err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	o.Reset()
+	_, err := trimCheck(e, false, true, true, CheckErrors)
+	return err
+}
+
+func doGitCheckout(dir string, hash string) error {
+	var o bytes.Buffer
+	cmdCheckout := exec.Command("git", "checkout", hash)
+	if err := execCmd(*cmdCheckout, dir, &o, nil); err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
+	}
+	_, err := trimCheck(o, false, true, true, CheckErrors)
+	return err
+}
+
+func doGetCommitList(dir string) (string, error) {
+	var o bytes.Buffer
+	cmdCommitList := exec.Command("git", "--no-pager", "log", "--pretty=format:%H::%s::%an")
+	if err := execCmd(*cmdCommitList, dir, &o, nil); err != nil {
+		return "", errors.Wrap(err, "error: an error occured while processing command")
+	}
+	return trimCheck(o, false, true, true, CheckErrors)
+}
+
+func doGitBranchList(dir string) (string, error) {
+	var o bytes.Buffer
+	cmdBranchList := exec.Command("git", "for-each-ref", "--sort=committerdate", "refs/heads/", "--format=%(refname:short)")
+	if err := execCmd(*cmdBranchList, dir, &o, nil); err != nil {
+		return "", errors.Wrap(err, "error: an error occured while processing command")
+	}
+	return trimCheck(o, false, true, true, CheckErrors)
+}
+
+func doGitPull(dir string) error {
+	var e bytes.Buffer
+	cmdFetch := exec.Command("git", "pull")
+	if err := execCmd(*cmdFetch, dir, nil, &e); err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
+	}
+	_, err := trimCheck(e, false, true, true, CheckErrors)
+	return err
+}
+
+func (b *browser) initialize() error {
+	workingd, err := doBaseGetWorkingDir()
+	if err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
+	}
+	b.workingd = workingd
+
+	gitUrl, err := doBaseGetRemoteUrl()
+	if err != nil {
+		return errors.Wrap(err, "error: an error occurred while processing command")
+	}
+	b.gitUrl = gitUrl
+
+	rbhash, err := doGetHeadCommit("")
+	if err != nil {
+		return errors.Wrap(err, "error: an error occurred while processing command")
+	}
+	b.rbhash = rbhash
+
+	rbbranch, err := doGetHeadBranch("")
+	if err != nil {
+		return errors.Wrap(err, "error: an error occurred while processing command")
+	}
+	b.rbbranch = rbbranch
 
 	if err := b.execClone(false); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
@@ -103,71 +218,41 @@ func (b *browser) initialize() error {
 }
 
 func (b *browser) execClone(force bool) error {
-	var o bytes.Buffer
-	var e bytes.Buffer
-
 	if _, err := os.Stat(filepath.Join(b.workingd, SandboxDirName, ".git")); os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Join(b.workingd, SandboxDirName), 0755); err != nil {
+		if err := doBaseCreateSandbox(filepath.Join(b.workingd, SandboxDirName)); err != nil {
 			return errors.Wrap(err, "error: could not create sandbox directory")
 		}
-
-		cmdClone := exec.Command("git", "clone", "--verbose", b.gitUrl, filepath.Join(b.workingd, SandboxDirName))
-		if err := execCmd(*cmdClone, "", nil, &e); err != nil {
+		if err := doGitClone(filepath.Join(b.workingd, SandboxDirName), b.gitUrl); err != nil {
 			return errors.Wrap(err, "error: an error occured while processing command")
 		}
-		rawClone := e.String()
-		if strings.Contains(rawClone, "fatal") || strings.Contains(rawClone, "error") {
-			return errors.New(rawClone)
-		}
-		e.Reset()
 	} else if force {
-		os.RemoveAll(filepath.Join(b.workingd, SandboxDirName))
-		if err := os.MkdirAll(filepath.Join(b.workingd, SandboxDirName), 0755); err != nil {
+		if err := doBaseRemoveSandbox(filepath.Join(b.workingd, SandboxDirName)); err != nil {
+			return errors.Wrap(err, "error: could not remove sandbox directory")
+		}
+		if err := doBaseCreateSandbox(filepath.Join(b.workingd, SandboxDirName)); err != nil {
 			return errors.Wrap(err, "error: could not create sandbox directory")
 		}
-
-		cmdClone := exec.Command("git", "clone", "--verbose", b.gitUrl, filepath.Join(b.workingd, SandboxDirName))
-		if err := execCmd(*cmdClone, "", nil, &e); err != nil {
+		if err := doGitClone(filepath.Join(b.workingd, SandboxDirName), b.gitUrl); err != nil {
 			return errors.Wrap(err, "error: an error occured while processing command")
 		}
-		rawClone := e.String()
-		if strings.Contains(rawClone, "fatal") || strings.Contains(rawClone, "error") {
-			return errors.New(rawClone)
-		}
-		e.Reset()
 	} else if err != nil {
 		return errors.Wrap(err, "error: could not create sandbox directory")
 	}
 
-	cmdFetch := exec.Command("git", "fetch")
-	if err := execCmd(*cmdFetch, filepath.Join(b.workingd, SandboxDirName), nil, nil); err != nil {
+	if err := doGitFetch(filepath.Join(b.workingd, SandboxDirName)); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	rawFetch := e.String()
-	if strings.Contains(rawFetch, "fatal") || strings.Contains(rawFetch, "error") {
-		return errors.New(rawFetch)
-	}
-	e.Reset()
 
-	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
-	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	current, err := doGetHeadCommit(filepath.Join(b.workingd, SandboxDirName))
+	if err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.current = strings.TrimSpace(o.String())
-	if strings.Contains(b.current, "fatal") {
-		return errors.New(b.current)
-	}
-	o.Reset()
+	b.current = current
 
-	cmdCommitList := exec.Command("git", "--no-pager", "log", "--pretty=format:%H::%s::%an")
-	if err := execCmd(*cmdCommitList, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	rawCommitList, err := doGetCommitList(filepath.Join(b.workingd, SandboxDirName))
+	if err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	rawCommitList := o.String()
-	if strings.Contains(rawCommitList, "fatal") {
-		return errors.New(rawCommitList)
-	}
-	o.Reset()
 	b.commitList = make([]commit, 0)
 	clines := strings.Split(rawCommitList, "\n")
 	for _, line := range clines {
@@ -179,15 +264,10 @@ func (b *browser) execClone(force bool) error {
 		})
 	}
 
-	cmdBranchList := exec.Command("git", "for-each-ref", "--sort=committerdate", "refs/heads/", "--format=%(refname:short)")
-	if err := execCmd(*cmdBranchList, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	rawBranchList, err := doGitBranchList(filepath.Join(b.workingd, SandboxDirName))
+	if err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	rawBranchList := o.String()
-	if strings.Contains(rawBranchList, "fatal") {
-		return errors.New(rawBranchList)
-	}
-	o.Reset()
 	b.branchList = make([]string, 0)
 	blines := strings.Split(rawBranchList, "\n")
 	for _, line := range blines {
@@ -200,26 +280,14 @@ func (b *browser) execClone(force bool) error {
 }
 
 func (b *browser) execMove(hash string) error {
-	var o bytes.Buffer
-	cmdCheckout := exec.Command("git", "checkout", hash)
-	if err := execCmd(*cmdCheckout, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	if err := doGitCheckout(filepath.Join(b.workingd, SandboxDirName), hash); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	checkoutOutput := o.String()
-	if strings.Contains(checkoutOutput, "error") {
-		return errors.New(checkoutOutput)
-	}
-	o.Reset()
-
-	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
-	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	current, err := doGetHeadCommit(filepath.Join(b.workingd, SandboxDirName))
+	if err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.current = strings.TrimSpace(o.String())
-	if strings.Contains(b.current, "fatal") {
-		return errors.New(b.rbhash)
-	}
-	o.Reset()
+	b.current = current
 	return nil
 }
 
@@ -242,38 +310,18 @@ func (b *browser) execBranchList() error {
 }
 
 func (b *browser) execBranch(branch string) error {
-	var o bytes.Buffer
-	var e bytes.Buffer
-
-	cmdFetch := exec.Command("git", "pull")
-	if err := execCmd(*cmdFetch, filepath.Join(b.workingd, SandboxDirName), nil, &e); err != nil {
+	if err := doGitPull(filepath.Join(b.workingd, SandboxDirName)); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	rawFetch := e.String()
-	if strings.Contains(rawFetch, "fatal") || strings.Contains(rawFetch, "error") {
-		return errors.New(rawFetch)
-	}
-	e.Reset()
-
-	cmdCheckout := exec.Command("git", "checkout", branch)
-	if err := execCmd(*cmdCheckout, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	if err := doGitCheckout(filepath.Join(b.workingd, SandboxDirName), branch); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	checkoutOutput := o.String()
-	if strings.Contains(checkoutOutput, "error") {
-		return errors.New(checkoutOutput)
-	}
-	o.Reset()
 
-	cmdCommitList := exec.Command("git", "--no-pager", "log", "--pretty=format:%H::%s::%an")
-	if err := execCmd(*cmdCommitList, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	rawCommitList, err := doGetCommitList(filepath.Join(b.workingd, SandboxDirName))
+	if err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	rawCommitList := o.String()
-	if strings.Contains(rawCommitList, "fatal") {
-		return errors.New(rawCommitList)
-	}
-	o.Reset()
+	b.commitList = make([]commit, 0)
 	clines := strings.Split(rawCommitList, "\n")
 	for _, line := range clines {
 		parts := strings.Split(line, "::")
@@ -288,16 +336,11 @@ func (b *browser) execBranch(branch string) error {
 }
 
 func (b *browser) execNext() error {
-	var o bytes.Buffer
-	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
-	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	current, err := doGetHeadCommit(filepath.Join(b.workingd, SandboxDirName))
+	if err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.current = strings.TrimSpace(o.String())
-	if strings.Contains(b.current, "fatal") {
-		return errors.New(b.rbhash)
-	}
-	o.Reset()
+	b.current = current
 	for i, commit := range b.commitList {
 		if strings.TrimSpace(commit.hash) == strings.TrimSpace(b.current) {
 			if i > 0 {
@@ -310,16 +353,11 @@ func (b *browser) execNext() error {
 }
 
 func (b *browser) execPrev() error {
-	var o bytes.Buffer
-	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
-	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+	current, err := doGetHeadCommit(filepath.Join(b.workingd, SandboxDirName))
+	if err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
-	b.current = strings.TrimSpace(o.String())
-	if strings.Contains(b.current, "fatal") {
-		return errors.New(b.current)
-	}
-	o.Reset()
+	b.current = current
 	for i, commit := range b.commitList {
 		if strings.TrimSpace(commit.hash) == strings.TrimSpace(b.current) {
 			if i < len(b.commitList)-1 {
@@ -381,7 +419,8 @@ func (b *browser) execCommand(args []string) error {
 	case "help":
 		return b.execHelp()
 	default:
-		return errors.New("error: invalid command")
+		fmt.Println("error: invalid command")
+		return nil
 	}
 	return nil
 }
@@ -411,7 +450,6 @@ func main() {
 
 	//Parse Configuration
 	var interactive *bool = flag.Bool("i", false, "starts REPL to interactively issue commands")
-
 	flag.Parse()
 
 	var outputFmt string = "%v\n"
