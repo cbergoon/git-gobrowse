@@ -95,18 +95,33 @@ func (b *browser) initialize() error {
 	}
 	o.Reset()
 
-	if err := b.execClone(); err != nil {
+	if err := b.execClone(false); err != nil {
 		return errors.Wrap(err, "error: an error occured while processing command")
 	}
 
 	return nil
 }
 
-func (b *browser) execClone() error {
+func (b *browser) execClone(force bool) error {
 	var o bytes.Buffer
 	var e bytes.Buffer
 
 	if _, err := os.Stat(filepath.Join(b.workingd, SandboxDirName, ".git")); os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Join(b.workingd, SandboxDirName), 0755); err != nil {
+			return errors.Wrap(err, "error: could not create sandbox directory")
+		}
+
+		cmdClone := exec.Command("git", "clone", "--verbose", b.gitUrl, filepath.Join(b.workingd, SandboxDirName))
+		if err := execCmd(*cmdClone, "", nil, &e); err != nil {
+			return errors.Wrap(err, "error: an error occured while processing command")
+		}
+		rawClone := e.String()
+		if strings.Contains(rawClone, "fatal") || strings.Contains(rawClone, "error") {
+			return errors.New(rawClone)
+		}
+		e.Reset()
+	} else if force {
+		os.RemoveAll(filepath.Join(b.workingd, SandboxDirName))
 		if err := os.MkdirAll(filepath.Join(b.workingd, SandboxDirName), 0755); err != nil {
 			return errors.Wrap(err, "error: could not create sandbox directory")
 		}
@@ -134,7 +149,15 @@ func (b *browser) execClone() error {
 	}
 	e.Reset()
 
-	//Todo: Set current commit hash
+	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
+	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
+	}
+	b.current = strings.TrimSpace(o.String())
+	if strings.Contains(b.current, "fatal") {
+		return errors.New(b.current)
+	}
+	o.Reset()
 
 	cmdCommitList := exec.Command("git", "--no-pager", "log", "--pretty=format:%H::%s::%an")
 	if err := execCmd(*cmdCommitList, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
@@ -145,6 +168,7 @@ func (b *browser) execClone() error {
 		return errors.New(rawCommitList)
 	}
 	o.Reset()
+	b.commitList = make([]commit, 0)
 	clines := strings.Split(rawCommitList, "\n")
 	for _, line := range clines {
 		parts := strings.Split(line, "::")
@@ -164,6 +188,7 @@ func (b *browser) execClone() error {
 		return errors.New(rawBranchList)
 	}
 	o.Reset()
+	b.branchList = make([]string, 0)
 	blines := strings.Split(rawBranchList, "\n")
 	for _, line := range blines {
 		if len(strings.TrimSpace(line)) > 0 {
@@ -184,12 +209,27 @@ func (b *browser) execMove(hash string) error {
 	if strings.Contains(checkoutOutput, "error") {
 		return errors.New(checkoutOutput)
 	}
+	o.Reset()
+
+	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
+	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
+	}
+	b.current = strings.TrimSpace(o.String())
+	if strings.Contains(b.current, "fatal") {
+		return errors.New(b.rbhash)
+	}
+	o.Reset()
 	return nil
 }
 
 func (b *browser) execLog() error {
 	for _, commit := range b.commitList {
-		fmt.Printf("%v - %v %v\n", commit.hash, commit.author, commit.message)
+		if commit.hash == b.current {
+			fmt.Printf("* %v - %v %v\n", commit.hash, commit.author, commit.message)
+		} else {
+			fmt.Printf("%v - %v %v\n", commit.hash, commit.author, commit.message)
+		}
 	}
 	return nil
 }
@@ -248,10 +288,21 @@ func (b *browser) execBranch(branch string) error {
 }
 
 func (b *browser) execNext() error {
+	var o bytes.Buffer
+	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
+	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
+	}
+	b.current = strings.TrimSpace(o.String())
+	if strings.Contains(b.current, "fatal") {
+		return errors.New(b.rbhash)
+	}
+	o.Reset()
 	for i, commit := range b.commitList {
-		if strings.Compare(commit.hash, b.current) == 0 {
-			if i < len(b.commitList)-1 {
-				b.execMove(b.commitList[i+1].hash)
+		if strings.TrimSpace(commit.hash) == strings.TrimSpace(b.current) {
+			if i > 0 {
+				b.execMove(b.commitList[i-1].hash)
+				break
 			}
 		}
 	}
@@ -259,10 +310,21 @@ func (b *browser) execNext() error {
 }
 
 func (b *browser) execPrev() error {
+	var o bytes.Buffer
+	cmdGitHeadCommit := exec.Command("git", "rev-parse", "HEAD")
+	if err := execCmd(*cmdGitHeadCommit, filepath.Join(b.workingd, SandboxDirName), &o, nil); err != nil {
+		return errors.Wrap(err, "error: an error occured while processing command")
+	}
+	b.current = strings.TrimSpace(o.String())
+	if strings.Contains(b.current, "fatal") {
+		return errors.New(b.current)
+	}
+	o.Reset()
 	for i, commit := range b.commitList {
-		if strings.Compare(commit.hash, b.current) == 0 {
-			if i > 0 {
-				b.execMove(b.commitList[i-1].hash)
+		if strings.TrimSpace(commit.hash) == strings.TrimSpace(b.current) {
+			if i < len(b.commitList)-1 {
+				b.execMove(b.commitList[i+1].hash)
+				break
 			}
 		}
 	}
@@ -270,6 +332,12 @@ func (b *browser) execPrev() error {
 }
 
 func (b *browser) execClean() error {
+	//Todo: Implement
+	return nil
+}
+
+func (b *browser) execHelp() error {
+	//Todo: Implement
 	return nil
 }
 
@@ -279,15 +347,15 @@ func (b *browser) execCommand(args []string) error {
 	}
 	switch args[0] {
 	case "first":
-		if len(b.commitList) > 0 {
-			return errors.New("error: no commits to browse")
-		}
-		return b.execMove(b.commitList[0].hash)
-	case "last":
-		if len(b.commitList) > 0 {
+		if len(b.commitList) <= 0 {
 			return errors.New("error: no commits to browse")
 		}
 		return b.execMove(b.commitList[len(b.commitList)-1].hash)
+	case "last":
+		if len(b.commitList) <= 0 {
+			return errors.New("error: no commits to browse")
+		}
+		return b.execMove(b.commitList[0].hash)
 	case "list":
 		return b.execLog()
 	case "next":
@@ -308,6 +376,10 @@ func (b *browser) execCommand(args []string) error {
 		return b.execBranchList()
 	case "clean":
 		return b.execClean()
+	case "clone":
+		return b.execClone(true)
+	case "help":
+		return b.execHelp()
 	default:
 		return errors.New("error: invalid command")
 	}
@@ -334,11 +406,11 @@ func (b *browser) runRepl() error {
 }
 
 func main() {
-	var debug bool = true
+	var debug bool = false
+	var sandboxdir bool = false
 
 	//Parse Configuration
 	var interactive *bool = flag.Bool("i", false, "starts REPL to interactively issue commands")
-	var sandboxdir *bool = flag.Bool("s", true, "sandboxed directory to browse repo")
 
 	flag.Parse()
 
@@ -355,17 +427,17 @@ func main() {
 		}
 	} else {
 		if len(args) < 1 || len(args) > 2 {
-			fmt.Printf(outputFmt, errors.New("error: too many argument"))
+			fmt.Printf(outputFmt, errors.New("error: invalid argument"))
 			return
 		}
 	}
 
 	if debug {
-		fmt.Println("debug: args are ", *interactive, *sandboxdir, args)
+		fmt.Println("debug: args are ", *interactive, sandboxdir, args)
 	}
 
 	//Run Command
-	b, err := NewBrowser(*sandboxdir)
+	b, err := NewBrowser(sandboxdir)
 	if err != nil {
 		fmt.Printf(outputFmt, errors.Wrap(err, "error: failed to create browser"))
 		return
