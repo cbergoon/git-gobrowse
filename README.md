@@ -1,4 +1,4 @@
-###GoBrowse - A Git Addon
+### GoBrowse - A Git Addon
 
 Add code .gif
 
@@ -6,21 +6,21 @@ DISCLAIMER: So far, this code has been only lightly tested with a very narrow us
 at the source to make sure it will work for you before running it in you project. It is intended as a tool to ease browsing 
 the history of a project NOT to replace or teach ANY Git functionality. 
 
-####What is it? 
+#### What is it? 
 GoBrowse is a Git add-on to easily browse project history from within a sandbox in the project directory.
 The goal is to ease the pain of rolling through commits, be it for learning a new project or just to grab a lost 
 line of code.
  
-####How to Install?
+#### How to Install?
 
-#####For Mac
+##### For Mac
 Get the source with ```go get github.com/cbergoon/git-gobrowse```
 
 Build the source with ```go install github.com/cbergoon/git-gobrowse```
 
 Move to a directory on your path with ```mv $GOPATH/bin/git-gobrowse /usr/local/bin/git-gobrowse```
 
-####Usage
+#### Usage
 Start gobrowse by running:
 ```git gobrowse -i``` 
 or 
@@ -29,7 +29,7 @@ or
 This will start a REPL from which the repository can be explored with the commands in the next section. Keep in mind, 
 all changes to repo state are made in the ```.sandbox``` directory. 
 
-#####Commands
+##### Commands
 ```clone```: Re-clone the current repository into the ```.sandbox``` directory.
 
 ```list```: List all commits. Notating the current commit.
@@ -50,7 +50,7 @@ all changes to repo state are made in the ```.sandbox``` directory.
 
 And thats it!
 
-####Todo
+#### Todo
 1) Implement 'help' command
 4) Implement 'clean' command
 2) Kinda messy. Could be a lot better with some refactoring...
